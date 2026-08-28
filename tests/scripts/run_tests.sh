@@ -84,6 +84,13 @@ if [[ -n "${enable_omp_targets}" ]]; then
   targets+=("//:omp_tests")
 fi
 
+# Objective-C is macOS only: the sources are compiled against the macOS SDK, and
+# the targets in //objc are all `target_compatible_with` macOS. The darwin
+# toolchain that can compile them is only configured under bzlmod.
+if [[ ${OSTYPE} == 'darwin'* ]] && [[ ${USE_BZLMOD:-true} == "true" ]]; then
+  targets+=("//objc:all")
+fi
+
 if [[ -n "${LLVM_VERSION}" ]]; then
   echo "LLVM_VERSION=${LLVM_VERSION}"
   common_test_args+=(

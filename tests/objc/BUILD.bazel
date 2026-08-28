@@ -1,0 +1,90 @@
+# Copyright 2026 The Bazel Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Objective-C and Objective-C++ support. Objective-C sources are only accepted
+# by `objc_library` (`cc_library` rejects .m/.mm outright), and the toolchain
+# only has a macOS SDK to compile them against, so everything here is macOS
+# only; the targets are skipped elsewhere.
+
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_cc//cc:defs.bzl", "cc_test", "objc_library")
+load(":fake_framework.bzl", "fake_framework")
+
+objc_library(
+    name = "greeter",
+    srcs = ["greeter.m"],
+    hdrs = ["greeter.h"],
+    non_arc_srcs = ["greeter_no_arc.m"],
+    sdk_frameworks = ["Foundation"],
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+objc_library(
+    name = "mixed",
+    srcs = ["mixed.mm"],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [":greeter"],
+)
+
+# Links Objective-C, Objective-C++ and C++ objects into one binary and checks
+# that the Objective-C runtime is actually there at run time.
+cc_test(
+    name = "objc_test",
+    srcs = ["objc_test.cc"],
+    linkstatic = True,
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":greeter",
+        ":mixed",
+    ],
+)
+
+# `pch`, `sdk_includes` and framework search paths are all passed to the
+# toolchain as build variables rather than as copts, so a toolchain that does
+# not expand them fails to compile these.
+objc_library(
+    name = "pch",
+    srcs = ["pch_test.m"],
+    pch = "prefix.pch",
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+objc_library(
+    name = "sdk_includes",
+    srcs = ["sdk_includes_test.m"],
+    sdk_includes = ["CommonCrypto"],
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+fake_framework(
+    name = "fake_framework",
+    hdrs = ["Fake.framework/Headers/Fake.h"],
+)
+
+objc_library(
+    name = "framework",
+    srcs = ["framework_test.m"],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [":fake_framework"],
+)
+
+build_test(
+    name = "objc_build_test",
+    target_compatible_with = ["@platforms//os:macos"],
+    targets = [
+        ":framework",
+        ":pch",
+        ":sdk_includes",
+    ],
+)

@@ -495,6 +495,12 @@ llvm_config_attrs.update({
     "_cc_toolchain_config_bzl": attr.label(
         default = "//toolchain:cc_toolchain_config.bzl",
     ),
+    "_apple_cc_toolchain_bzl": attr.label(
+        default = "//toolchain:apple_cc_toolchain.bzl",
+    ),
+    "_xcode_placeholder_wrapper_sh_tpl": attr.label(
+        default = "//toolchain:xcode_placeholder_wrapper.sh.tpl",
+    ),
     "_toolchains_bzl_tpl": attr.label(
         default = "//toolchain:toolchains.bzl.tpl",
     ),

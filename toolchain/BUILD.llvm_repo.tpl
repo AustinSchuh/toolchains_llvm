@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@bazel_skylib//rules/directory:directory.bzl", "directory")
+load("@bazel_skylib//rules/directory:subdirectory.bzl", "subdirectory")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -67,6 +69,27 @@ filegroup(
         ],
         allow_empty = True,
     ),
+)
+
+# Clang's builtin headers as a directory, for toolchains built on rules_cc's
+# rule-based API. Those take `allowlist_include_directories` as directory
+# targets rather than the plain strings `cxx_builtin_include_directories`
+# takes, and without one Bazel rejects any translation unit that reaches a
+# builtin header with "undeclared inclusion(s)". `directory` derives its path
+# from the package it is declared in, so the subdirectory has to be walked to
+# explicitly.
+directory(
+    name = "root_directory",
+    srcs = glob(
+        ["lib/clang/*/include/**"],
+        allow_empty = True,
+    ),
+)
+
+subdirectory(
+    name = "builtin_include_directory",
+    parent = ":root_directory",
+    path = "lib/clang/{LLVM_VERSION}/include",
 )
 
 filegroup(
@@ -243,6 +266,11 @@ filegroup(
 filegroup(
     name = "dwp",
     srcs = ["bin/llvm-dwp"],
+)
+
+filegroup(
+    name = "dsymutil",
+    srcs = ["bin/dsymutil"],
 )
 
 filegroup(

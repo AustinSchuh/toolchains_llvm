@@ -18,6 +18,7 @@ load("@bazel_skylib//rules:native_binary.bzl", "native_binary")
 load("@rules_cc//cc:defs.bzl", "cc_import", "cc_toolchain", "cc_toolchain_suite")
 load("@toolchains_llvm//toolchain/internal:system_module_map.bzl", "system_module_map")
 load("%{cc_toolchain_config_bzl}", "cc_toolchain_config")
+load("%{apple_cc_toolchain_bzl}", "apple_cc_toolchain")
 
 # This filegroup target is used when not using absolute paths and shared
 # between different toolchains.

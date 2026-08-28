@@ -538,6 +538,59 @@ ninja && ninja install
 # one from your clang distribution before archiving.
 ```
 
+### Objective-C and Objective-C++ (macOS)
+
+`objc_library` targets build with this toolchain on macOS; `.m` and `.mm`
+sources are compiled with the same clang, against the same macOS SDK sysroot,
+as the C and C++ ones. `cc_library` does not accept Objective-C sources at all
+(Bazel rejects `.m`/`.mm` in its `srcs`), so `objc_library` is the way in; the
+resulting archives link into ordinary `cc_binary` / `cc_test` targets, and
+system frameworks come in through `linkopts = ["-framework Foundation"]` or
+`objc_library(sdk_frameworks = ...)`.
+
+Beyond the flags shared with C/C++, Bazel passes a few Objective-C specific
+things to the toolchain as build variables rather than as copts. The toolchain
+expands each of them, so the corresponding `objc_library` attributes behave as
+documented:
+
+| What Bazel passes          | What the toolchain does with it                                    |
+| -------------------------- | ------------------------------------------------------------------ |
+| `objc_arc` / `no_objc_arc` | `-fobjc-arc` for `srcs`, `-fno-objc-arc` for `non_arc_srcs`        |
+| `pch_file`                 | `-include <header>`, for `pch = ...`                               |
+| `framework_include_paths`  | `-F` search paths contributed by imported frameworks               |
+| `__BAZEL_XCODE_SDKROOT__`  | resolved to the macOS SDK, which is what makes `sdk_includes` work |
+
+This works because the darwin toolchains are built on apple_support's
+toolchain building code rather than on `unix_cc_toolchain_config`, which does
+not declare the Objective-C compile actions -- without them `objc_library`
+fails with *"Compiling objc_library targets requires the Apple CC toolchain"*
+whatever else the toolchain is configured to do. See
+[docs/darwin-apple-support-toolchain.md][dast]. Targets for every other
+platform are unaffected, including when cross-compiling to Linux from a Mac.
+
+[dast]: docs/darwin-apple-support-toolchain.md
+
+#### Relationship to apple_support and rules_apple
+
+What is described above is plain Objective-C compiled for macOS. Building Apple
+*bundles* -- anything in [rules_apple](https://github.com/bazelbuild/rules_apple)
+such as `ios_application`, `macos_application` or the framework rules -- is a
+different job, and needs the Apple CC toolchain from
+[apple_support](https://github.com/bazelbuild/apple_support): it wraps clang in
+`wrapped_clang`, declares the `objc-executable` and `objc-fully-link` actions
+those rules link through, selects the SDK per Apple platform from the Xcode
+configuration, and registers toolchains for the `ios`, `tvos`, `watchos` and
+`visionos` platforms. This toolchain does none of that and only targets macOS,
+so use apple_support for those builds; the two can coexist in one workspace.
+
+Note that both toolchains match a macOS target (apple_support registers
+`@platforms//os:macos` + cpu toolchains just as this one does), and Bazel picks
+the first *registered* match. If you use rules_apple, register apple_support's
+toolchains ahead of this one, or scope this one with
+`llvm.extra_target_compatible_with` / `--extra_toolchains` so the two do not
+compete. Targets for the non-macOS Apple platforms are unaffected: this
+toolchain never matches them.
+
 ## Distribution data and scripts
 
 The list of LLVM releases this toolchain knows about lives as JSONC data

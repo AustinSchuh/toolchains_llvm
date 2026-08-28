@@ -341,6 +341,7 @@ def llvm_config_impl(rctx):
         rctx.attr._build_toolchain_tpl,
         {
             "%{cc_toolchain_config_bzl}": str(rctx.attr._cc_toolchain_config_bzl),
+            "%{apple_cc_toolchain_bzl}": str(rctx.attr._apple_cc_toolchain_bzl),
             "%{cc_toolchains}": cc_toolchains_str,
             "%{symlinked_tools}": symlinked_tools_str,
             "%{tools_dir}": wrapper_bin_prefix.removesuffix("/"),
@@ -360,6 +361,23 @@ def llvm_config_impl(rctx):
             "%{toolchain_path_prefix}": llvm_dist_path_prefix,
         },
     )
+
+    # Compiler wrappers for the apple_support-built darwin toolchain. Unlike
+    # cc_wrapper.sh these are per-driver: the toolchain maps C and Objective-C
+    # to clang and C++/Objective-C++ to clang++, and the rewriting they do has
+    # to preserve which one was asked for.
+    if os == "darwin":
+        for driver in ["clang", "clang++"]:
+            rctx.template(
+                "bin/xcode_%s_wrapper.sh" % driver,
+                rctx.attr._xcode_placeholder_wrapper_sh_tpl,
+                {
+                    "%{compiler}": llvm_dist_path_prefix + "bin/" + driver,
+                    "%{toolchain_path_prefix}": llvm_dist_path_prefix,
+                    "%{dsymutil}": llvm_dist_path_prefix + "bin/dsymutil",
+                    "%{strip}": llvm_dist_path_prefix + "bin/llvm-strip",
+                },
+            )
 
     if hasattr(rctx, "repo_metadata"):
         return rctx.repo_metadata(reproducible = True)
@@ -447,10 +465,17 @@ def _cc_toolchain_str(
         (str(toolchain_info.extra_linker_files) if toolchain_info.extra_linker_files else None)
     )
 
+    # Whether the sysroot is the Xcode SDK this repo rule went and found,
+    # rather than one the user pointed at. The apple_support-built toolchain
+    # spells that case as `__BAZEL_XCODE_SDKROOT__` and lets Bazel supply the
+    # path per action; see apple_cc_toolchain.bzl.
+    xcode_sysroot = False
+
     if not sysroot_path:
         if exec_os == target_os and exec_arch == target_arch:
             # For darwin -> darwin, we can use the macOS SDK path.
             sysroot_path = _default_sysroot_path(rctx, exec_os)
+            xcode_sysroot = target_os == "darwin" and bool(sysroot_path)
         elif (target_os, target_arch) in _supported_no_sysroot_targets:
             sysroot_path = ""
         else:
@@ -579,7 +604,63 @@ def _cc_toolchain_str(
     if not add_cxx_builtin_include_dirs_before_sysroot:
         cxx_builtin_include_directories.extend(toolchain_info.additional_include_dirs_dict.get(target_pair, []))
 
-    template = """
+    # Darwin targets are built on apple_support's cc_toolchain macro; every
+    # other target stays on unix_cc_toolchain_config. See
+    # docs/darwin-apple-support-toolchain.md.
+    use_apple_support = target_os == "darwin"
+
+    if use_apple_support:
+        template = """
+# CC toolchain for cc-clang-{suffix}, built on apple_support.
+
+apple_cc_toolchain(
+    name = "cc-clang-{suffix}",
+    target_system_name = "{target_system_name}",
+    toolchain_path_prefix = "{llvm_dist_path_prefix}",
+    target_toolchain_path_prefix = "{target_toolchain_path_prefix}",
+    tools_path_prefix = "{tools_path_prefix}",
+    wrapper_bin_prefix = "{wrapper_bin_prefix}",
+    compiler_configuration = {{
+      "sysroot_path": "{sysroot_path}",
+      "cxx_standard": "{cxx_standard}",
+      "compile_flags": {compile_flags},
+      "conly_flags": {conly_flags},
+      "cxx_flags": {cxx_flags},
+      "link_flags": {link_flags},
+      "archive_flags": {archive_flags},
+      "link_libs": {link_libs},
+      "opt_compile_flags": {opt_compile_flags},
+      "dbg_compile_flags": {dbg_compile_flags},
+      "unfiltered_compile_flags": {unfiltered_compile_flags},
+      "extra_compile_flags": {extra_compile_flags},
+      "extra_cxx_flags": {extra_cxx_flags},
+      "extra_link_flags": {extra_link_flags},
+      "extra_archive_flags": {extra_archive_flags},
+      "extra_link_libs": {extra_link_libs},
+      "extra_opt_compile_flags": {extra_opt_compile_flags},
+      "extra_dbg_compile_flags": {extra_dbg_compile_flags},
+      "extra_unfiltered_compile_flags": {extra_unfiltered_compile_flags},
+      "stdlib": "{stdlib}",
+      "fastbuild_compile_flags": {fastbuild_compile_flags},
+      "opt_link_flags": {opt_link_flags},
+      "coverage_compile_flags": {coverage_compile_flags},
+      "coverage_link_flags": {coverage_link_flags},
+      "extra_opt_link_flags": {extra_opt_link_flags},
+      "extra_coverage_compile_flags": {extra_coverage_compile_flags},
+      "extra_coverage_link_flags": {extra_coverage_link_flags},
+    }},
+    compiler_files = ":tool-files-{suffix}",
+    builtin_include_directory = "{target_toolchain_root}:builtin_include_directory",
+    module_map = ":module-{suffix}",
+    xcode_sysroot = {xcode_sysroot},
+    sanitizer_runtime_lib = {sanitizer_runtime_lib_label},
+    extra_known_features = {extra_known_features},
+    extra_enabled_features = {extra_enabled_features},
+    llvm_version = "{llvm_version}",
+)
+"""
+    else:
+        template = """
 # CC toolchain for cc-clang-{suffix}.
 
 cc_toolchain_config(
@@ -629,7 +710,11 @@ cc_toolchain_config(
     cxx_builtin_include_directories = {cxx_builtin_include_directories},
     llvm_version = "{llvm_version}",
 )
+"""
 
+    # The toolchain declaration itself is the same either way: both branches
+    # produce a `cc-clang-{suffix}` to point it at.
+    template = template + """
 toolchain(
     name = "cc-toolchain-{suffix}",
     exec_compatible_with = [
@@ -745,7 +830,37 @@ filegroup(name = "objcopy-files-{suffix}", srcs = ["{llvm_dist_label_prefix}objc
 filegroup(name = "strip-files-{suffix}", srcs = ["{llvm_dist_label_prefix}strip", {extra_files_str}])
 """
 
-    template = template + """
+    if use_apple_support:
+        # The compiler's action inputs. Deliberately not `compiler-files-*` or
+        # `all-files-*`: those pull in `internal-use-tools`, which stages this
+        # repo's whole `bin` directory, and the compiler wrappers live in that
+        # directory. Staging the directory and a file inside it makes the
+        # darwin sandbox fail with "File exists". The tools that are not
+        # reached through a wrapper carry their own `src` instead.
+        template = template + """
+filegroup(
+    name = "tool-files-{suffix}",
+    srcs = [
+        ":compiler-components-{suffix}",
+        ":linker-components-{suffix}",
+        # The compiler wrapper runs these after a link: dsymutil when Bazel
+        # asks for a .dSYM bundle, llvm-strip when it asks for a stripped
+        # binary (which fastbuild does by default).
+        "{llvm_dist_label_prefix}dsymutil",
+        "{llvm_dist_label_prefix}strip",
+    ],
+)
+
+system_module_map(
+    name = "module-{suffix}",
+    cxx_builtin_include_files = ":cxx_builtin_include_files-{suffix}",
+    cxx_builtin_include_directories = {cxx_builtin_include_directories},
+    sysroot_files = ":sysroot-components-{suffix}",
+    sysroot_path = "{sysroot_path}",
+)
+{sanitizer_runtime_filegroup}"""
+    else:
+        template = template + """
 system_module_map(
     name = "module-{suffix}",
     cxx_builtin_include_files = ":cxx_builtin_include_files-{suffix}",
@@ -839,6 +954,7 @@ filegroup(
 
     return template.format(
         suffix = suffix,
+        xcode_sysroot = repr(xcode_sysroot),
         target_os = target_os,
         target_arch = target_arch,
         exec_os = exec_os,
@@ -899,6 +1015,9 @@ filegroup(
         extra_target_compatible_with_all_targets = toolchain_info.extra_target_compatible_with.get("", []),
         runtime_lib_attrs = runtime_lib_attrs,
         sanitizer_runtime_filegroup = runtime_lib_filegroup,
+        sanitizer_runtime_lib_label = (
+            repr(":sanitizer-runtime-libs-" + suffix) if runtime_lib_filegroup else "None"
+        ),
     )
 
 def _is_remote(rctx, exec_os, exec_arch):
